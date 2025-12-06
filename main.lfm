@@ -10,8 +10,10 @@ object MainForm: TMainForm
   ClientHeight = 500
   ClientWidth = 120
   Color = clBlack
+  FormStyle = fsStayOnTop
   Position = poScreenCenter
   LCLVersion = '4.4.0.0'
+  OnActivate = FormActivate
   OnCreate = FormCreate
   OnDestroy = FormDestroy
   object HeaderStaticText: TStaticText

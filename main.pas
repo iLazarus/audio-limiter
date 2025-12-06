@@ -148,6 +148,12 @@ const
   AUDCLNT_STREAMFLAGS_EVENTCALLBACK = $00040000;
   AUDCLNT_STREAMFLAGS_LOOPBACK = $00020000;
   
+  // SetWindowPos Constants for always-on-top
+  SWP_NOSIZE = $0001;
+  SWP_NOMOVE = $0002;
+  SWP_NOACTIVATE = $0010;
+  SWP_SHOWWINDOW = $0040;
+  
   // PKEY_Device_FriendlyName
   PKEY_Device_FriendlyName: PROPERTYKEY = (
     fmtid: '{A45C254E-DF1C-4EFD-8020-67D146A850E0}';
@@ -223,6 +229,7 @@ type
     procedure MainPaintBoxMouseWheel(Sender: TObject; Shift: TShiftState;
       WheelDelta: Integer; MousePos: TPoint; var Handled: Boolean);
     procedure MainPaintBoxPaint(Sender: TObject);
+    procedure FormActivate(Sender: TObject);
   private
     FMinDB: Single;
     FCurrentDeviceIndex: Integer;
@@ -254,6 +261,7 @@ type
     FCaptureChannels: Word;
     FRenderBufferSize: UINT32;
     FMinimizedToTray: Boolean;
+    FTopMostTimer: TTimer;
     procedure EnumerateDevices;
     procedure InitAudio(DeviceIndex: Integer);
     procedure FreeAudio;
@@ -269,6 +277,7 @@ type
     procedure ProcessAudioData;
     procedure MinimizeToTray;
     procedure RestoreFromTray;
+    procedure TopMostTimerTick(Sender: TObject);
   public
 
   end;
@@ -697,12 +706,15 @@ begin
   if FMinimizedToTray then Exit;
   FMinimizedToTray := True;
   AudioSampleTimer.Enabled := False; // 停止渲染定时器
+  FTopMostTimer.Enabled := False; // 托盘时暂停置顶看门狗
   ShowInTaskBar := stNever;
   TrayIcon1.Visible := True;
   Hide;
 end;
 
 procedure TMainForm.RestoreFromTray;
+const
+  HWND_TOPMOST_VALUE = HWND(-1);
 begin
   if not FMinimizedToTray then Exit;
   FMinimizedToTray := False;
@@ -711,8 +723,21 @@ begin
   Show;
   Application.BringToFront;
   SetForegroundWindow(Handle);
+  // 确保窗口恢复后仍然置顶
+  SetWindowPos(Handle, HWND_TOPMOST_VALUE, 0, 0, 0, 0, SWP_NOMOVE or SWP_NOSIZE or SWP_NOACTIVATE);
   AudioSampleTimer.Enabled := True;
+  FTopMostTimer.Enabled := True; // 恢复看门狗
   MainPaintBox.Invalidate;
+end;
+
+procedure TMainForm.TopMostTimerTick(Sender: TObject);
+const
+  HWND_TOPMOST_VALUE = HWND(-1);
+begin
+  // 周期性重申 TopMost，避免被其他窗口拉下 Z 序
+  if Handle <> 0 then
+    SetWindowPos(Handle, HWND_TOPMOST_VALUE, 0, 0, 0, 0,
+      SWP_NOMOVE or SWP_NOSIZE or SWP_NOACTIVATE);
 end;
 
 procedure TMainForm.MainPaintBoxPaint(Sender: TObject);
@@ -990,6 +1015,12 @@ begin
   FStreamTimer.Interval := 5;  // 5ms 处理间隔
   FStreamTimer.OnTimer := @StreamTimerTick;
 
+  // 创建置顶看门狗定时器（低频，避免性能影响）
+  FTopMostTimer := TTimer.Create(Self);
+  FTopMostTimer.Enabled := True;
+  FTopMostTimer.Interval := 1000; // 每秒重申一次 TopMost
+  FTopMostTimer.OnTimer := @TopMostTimerTick;
+
   // 托盘图标配置
   TrayIcon1.Visible := False;
   TrayIcon1.Hint := 'AudioMeter';
@@ -1013,6 +1044,14 @@ begin
     InitAudio(FCurrentDeviceIndex);
 end;
 
+procedure TMainForm.FormActivate(Sender: TObject);
+const
+  HWND_TOPMOST_VALUE = HWND(-1);
+begin
+  // 使用 Windows API 强制窗口置顶
+  SetWindowPos(Handle, HWND_TOPMOST_VALUE, 0, 0, 0, 0, SWP_NOMOVE or SWP_NOSIZE or SWP_NOACTIVATE);
+end;
+
 procedure TMainForm.FormDestroy(Sender: TObject);
 begin
   StopLimiter;
@@ -1024,6 +1063,7 @@ begin
   FCaptureDeviceCollection := nil;
   FDeviceEnumerator := nil;
   FStreamTimer.Free;
+  if FTopMostTimer <> nil then FTopMostTimer.Free;
   TrayIcon1.Visible := False;
   TrayIcon1.PopupMenu := nil;
   CoUninitialize;
